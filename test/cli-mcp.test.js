@@ -2,8 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { TOOLS } from '../src/service.js';
 
 const root = new URL('../', import.meta.url);
+
+test('every tool publishes annotations and descriptions for all input properties', () => {
+  function checkDescriptions(schema, path) {
+    for (const [name, property] of Object.entries(schema.properties ?? {})) {
+      const propertyPath = `${path}.${name}`;
+      assert.equal(typeof property.description, 'string', `${propertyPath} needs a description`);
+      assert.ok(property.description.trim().length > 0, `${propertyPath} needs a nonempty description`);
+      checkDescriptions(property, propertyPath);
+    }
+    if (schema.items) checkDescriptions(schema.items, `${path}[]`);
+  }
+  for (const tool of TOOLS) {
+    assert.ok(tool.annotations, `${tool.name} needs annotations`);
+    assert.equal(typeof tool.annotations.title, 'string');
+    assert.ok(tool.annotations.title.trim().length > 0);
+    assert.equal(tool.annotations.readOnlyHint, tool.name !== 'activate_pro_license');
+    assert.equal(tool.annotations.destructiveHint, tool.name === 'activate_pro_license');
+    assert.equal(tool.annotations.idempotentHint, true);
+    assert.equal(tool.annotations.openWorldHint, tool.name !== 'get_pro_upgrade_info');
+    checkDescriptions(tool.inputSchema, tool.name);
+  }
+  assert.notEqual(
+    TOOLS.find(tool => tool.name === 'detect_block0_bundler').inputSchema.description,
+    TOOLS.find(tool => tool.name === 'scan_token_safety').inputSchema.description,
+  );
+});
 
 test('Dockerfile and Glama metadata support MCP directory introspection', () => {
   const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8');
@@ -44,7 +71,8 @@ test('Dockerfile and Glama metadata support MCP directory introspection', () => 
   const responses = result.stdout.trim().split('\n').map(JSON.parse);
   assert.equal(responses.length, 2);
   assert.ok(responses.find(response => response.id === 1)?.result.serverInfo);
-  assert.equal(responses.find(response => response.id === 2)?.result.tools.length, 6);
+  assert.equal(TOOLS.length, 6);
+  assert.deepEqual(responses.find(response => response.id === 2)?.result.tools, TOOLS);
 });
 
 test('--mcp cannot be combined with another CLI command', () => {
