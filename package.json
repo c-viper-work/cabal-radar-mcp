@@ -1,0 +1,16 @@
+{
+  "name": "cabal-radar-mcp",
+  "version": "1.0.0",
+  "description": "Zero-dependency Solana and Base risk intelligence, MCP stdio server and CLI with on-chain Pro activation",
+  "type": "module",
+  "author": "c-viper-work",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/c-viper-work/cabal-radar-mcp.git" },
+  "homepage": "https://c-viper-work.github.io/cabal-radar-mcp/",
+  "engines": { "node": ">=22" },
+  "bin": { "cabal-radar": "./bin/cabal-radar.js", "cabal-radar-mcp": "./bin/cabal-radar.js" },
+  "exports": { ".": "./src/index.js", "./license": "./src/license.js", "./constants": "./src/constants.js", "./worker": "./cloud-worker/worker.js" },
+  "files": ["src", "bin", "cloud-worker", "README.md", "LICENSE", "glama.json", "smithery.yaml"],
+  "scripts": { "test": "node --test test/*.test.js", "start": "node ./bin/cabal-radar.js mcp" },
+  "keywords": ["mcp", "model-context-protocol", "solana", "base", "rugcheck", "bundler", "cabal", "honeypot", "defi", "security"]
+}

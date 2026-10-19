@@ -1,0 +1,20 @@
+# Stdio launch metadata. Registry publication and hosting are separate steps.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      solanaRpcUrl:
+        type: string
+        default: https://api.mainnet-beta.solana.com
+        description: Solana mainnet JSON-RPC endpoint
+      baseRpcUrl:
+        type: string
+        default: https://mainnet.base.org
+        description: Base mainnet JSON-RPC endpoint
+    additionalProperties: false
+  commandFunction: |-
+    (config) => ({ command: 'node', args: ['bin/cabal-radar.js', 'mcp'], env: { SOLANA_RPC_URL: config.solanaRpcUrl || 'https://api.mainnet-beta.solana.com', BASE_RPC_URL: config.baseRpcUrl || 'https://mainnet.base.org' } })
+  exampleConfig:
+    solanaRpcUrl: https://api.mainnet-beta.solana.com
+    baseRpcUrl: https://mainnet.base.org

@@ -1,0 +1,6 @@
+test/
+docs/
+.env*
+.cabal-radar/
+license.json
+coverage/

@@ -1,0 +1,7 @@
+name = "cabal-radar"
+main = "worker.js"
+compatibility_date = "2025-11-25"
+
+[vars]
+BASE_RPC_URL = "https://mainnet.base.org"
+SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
