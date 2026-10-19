@@ -6,7 +6,7 @@ import { checkProStatus } from '../src/license.js';
 import { chainName } from '../src/rpc.js';
 const help = `cabal-radar 1.0.0 — Solana & Base risk intelligence
 Usage:
-  cabal-radar mcp
+  cabal-radar mcp (or --mcp)
   cabal-radar scan <address> [--chain solana|base] [--pro] [--json]
   cabal-radar upgrade
   cabal-radar activate --tx <hash_or_signature> --chain base|solana
@@ -15,13 +15,13 @@ Options: --help, --version
 RPC overrides: SOLANA_RPC_URL, BASE_RPC_URL
 License override: CABAL_RADAR_LICENSE_PATH`;
 try {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: { chain: { type: 'string' }, tx: { type: 'string' }, pro: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: { mcp: { type: 'boolean' }, chain: { type: 'string' }, tx: { type: 'string' }, pro: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean' } } });
   if (values.help) console.log(help);
   else if (values.version) console.log('1.0.0');
   else {
     const [command = 'mcp', address, ...extra] = positionals;
     if (extra.length || (command !== 'scan' && address)) throw new Error('Unexpected positional argument');
-    const allowed = { mcp: [], scan: ['chain','pro','json'], upgrade: ['json'], activate: ['tx','chain','json'], status: ['json'] };
+    const allowed = { mcp: ['mcp'], scan: ['chain','pro','json'], upgrade: ['json'], activate: ['tx','chain','json'], status: ['json'] };
     if (!allowed[command]) throw new Error('Unknown command; use --help');
     for (const key of Object.keys(values)) if (!allowed[command].includes(key)) throw new Error(`--${key} is not valid for ${command}`);
     const chain = chainName(values.chain), options = environmentOptions(chain);

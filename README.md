@@ -197,6 +197,8 @@ This is the **`onchain-receipt-v1` HTTP 402 scheme**, not the x402 `exact` payme
 
 ## Registry metadata and GitHub Pages
 
+The root `Dockerfile` uses Node.js 22 Alpine and starts `node bin/cabal-radar.js --mcp` for MCP stdio introspection without extra configuration. Build with `docker build -t cabal-radar-mcp .` and run with `docker run --rm -i cabal-radar-mcp`. The CLI accepts both `mcp` and `--mcp`.
+
 `glama.json` supplies the maintainer claim for [Glama](https://glama.ai/blog/2025-07-08-what-is-glamajson). `smithery.yaml` supplies the stdio launch command/configuration. Registry acceptance, organization ownership and current hosting capabilities must be verified by the maintainer; metadata does not automatically publish or guarantee one-click installation. Local license persistence is host-specific in containers.
 
 For MCP directories such as mcp.so, Smithery, Glama and Awesome-MCP, use:
