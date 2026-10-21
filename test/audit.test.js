@@ -120,7 +120,9 @@ test('Solana holder RPC restrictions degrade gracefully', async () => {
   for (const err of [
     new RpcError('RPC getTokenLargestAccounts: HTTP 429'),
     new RpcError('RPC getTokenLargestAccounts: HTTP 403'),
-    ...[-32000, -32005, -32012, 429].map(code => new RpcError('RPC getTokenLargestAccounts failed', code))
+    new RpcError('RPC getTokenLargestAccounts: HTTP 503', 503),
+    new RpcError('RPC getTokenLargestAccounts: network failure or timeout'),
+    ...[-32000, -32005, -32011, -32012, -32603, 429].map(code => new RpcError('RPC getTokenLargestAccounts failed', code))
   ]) {
     const rpc = async (method, params) => {
       if (method === 'getTokenLargestAccounts') throw err;
@@ -140,7 +142,7 @@ test('Solana holder query still rejects malformed responses and unrelated failur
       rpc: async (method, params) => method === 'getTokenLargestAccounts' ? { value } : fixture(method, params)
     }), /Missing largest token accounts/);
   }
-  for (const err of [new Error('RPC getTokenLargestAccounts: HTTP 429'), new RpcError('RPC getTokenLargestAccounts: HTTP 500'), new RpcError('RPC failure', -32603)]) {
+  for (const err of [new Error('RPC getTokenLargestAccounts: HTTP 429'), new RpcError('RPC getTokenLargestAccounts: HTTP 500'), new RpcError('RPC failure', -32602)]) {
     await assert.rejects(scanSolanaTokenBasic(MINT, {
       rpc: async (method, params) => {
         if (method === 'getTokenLargestAccounts') throw err;
