@@ -1,10 +1,11 @@
-import { TRANSFER_TOPIC, BASE_CHAIN_ID } from './constants.js';
-import { rpcClient, evmAddress, raw, pct, risk, flag } from './rpc.js';
+import { TRANSFER_TOPIC, BASE_CHAIN_ID, KNOWN_BASE_ROUTERS_AND_POOLS } from './constants.js';
+import { rpcClient, evmAddress, raw, pct, risk, flag, isRateLimit, enrichmentJson } from './rpc.js';
 import { selector } from './keccak.js';
 const ZERO = `0x${'0'.repeat(40)}`;
 const word = n => BigInt(n).toString(16).padStart(64, '0');
 const addrWord = a => a.slice(2).toLowerCase().padStart(64, '0');
 export function inspectBytecode(code) {
+  if (/^0xef0100[0-9a-fA-F]{40}$/.test(code)) return { flags: [flag('EIP7702_DELEGATED_ACCOUNT', 25, 'EIP-7702 delegated account designator; not a standalone ERC-20 contract')], selectors: [], permitPresent: false, approvalPresent: false, delegatedTo: '0x' + code.slice(8).toLowerCase() };
   if (!/^0x(?:[a-fA-F0-9]{2})+$/.test(code)) throw new Error('Invalid contract bytecode');
   // Scan all bytes: untrusted metadata can contain executable jump targets.
   const hex = code.slice(2).toLowerCase();
@@ -17,6 +18,9 @@ export function inspectBytecode(code) {
   if (ops.has(0xff)) flags.push(flag('SELFDESTRUCT', 15, 'SELFDESTRUCT opcode found; effects depend on EVM fork semantics and reachability'));
   if (ops.has(0xf4)) flags.push(flag('DELEGATECALL', 25, 'Delegatecall or proxy; implementation and upgrade permissions require separate review'));
   const signatures = [
+    ['setBots(address[])', 'BLACKLIST', 25], ['addBot(address)', 'BLACKLIST', 25],
+    ['setMaxTxAmount(uint256)', 'TX_LIMITS', 15], ['setMaxWalletSize(uint256)', 'TX_LIMITS', 15],
+    ['openTrading()', 'TRADING_TOGGLE', 10], ['enableTrading()', 'TRADING_TOGGLE', 10],
     ['blacklist(address)', 'BLACKLIST', 25], ['isBlacklisted(address)', 'BLACKLIST', 25], ['setBlacklist(address,bool)', 'BLACKLIST', 25],
     ['setTax(uint256)', 'MUTABLE_TAX', 20], ['setFee(uint256)', 'MUTABLE_TAX', 20], ['setTaxes(uint256,uint256)', 'MUTABLE_TAX', 20],
     ['pause()', 'PAUSABLE', 15], ['unpause()', 'PAUSABLE', 15], ['mint(address,uint256)', 'MINT', 25]
@@ -44,6 +48,32 @@ export async function scanBaseTokenBasic(tokenAddress, options = {}) {
   const code = await rpc('eth_getCode', [tokenAddress, 'latest']);
   if (!code || code === '0x') throw new Error('No contract at address');
   const analysis = inspectBytecode(code), flags = [...analysis.flags], unavailable = [];
+  let implementationAddress;
+  if (analysis.flags.some(f => f.code === 'DELEGATECALL')) {
+    let slotFailed = false;
+    const minimal = code.match(/363d3d373d3d3d363d73([0-9a-fA-F]{40})5af43d82803e903d91602b57fd5bf3/i);
+    if (minimal && !/^0{40}$/.test(minimal[1])) implementationAddress = `0x${minimal[1].toLowerCase()}`;
+    else for (const slot of ['0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc', '0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3']) {
+      const storage = await rpc('eth_getStorageAt', [tokenAddress, slot, 'latest']).catch(() => { slotFailed = true; return null; });
+      if (/^0x0{24}[0-9a-fA-F]{40}$/.test(storage || '') && !/^0x0{64}$/.test(storage)) { implementationAddress = `0x${storage.slice(-40).toLowerCase()}`; break; }
+    }
+    if (implementationAddress) {
+      const implCode = await rpc('eth_getCode', [implementationAddress, 'latest']).catch(() => null);
+      if (/^0x(?:[a-fA-F0-9]{2})+$/.test(implCode || '')) {
+        const implementation = inspectBytecode(implCode);
+        for (const f of implementation.flags) if (!flags.some(existing => existing.code === f.code)) flags.push(f);
+        analysis.implementation = implementation;
+        analysis.permitPresent ||= implementation.permitPresent;
+        analysis.approvalPresent ||= implementation.approvalPresent;
+      } else {
+        unavailable.push('implementationBytecode');
+        flags.push(flag('PROXY_UNRESOLVED', 15, 'Proxy implementation bytecode could not be fetched or verified'));
+      }
+    } else if (slotFailed) {
+      unavailable.push('implementationSlot');
+      flags.push(flag('PROXY_UNRESOLVED', 15, 'Proxy implementation storage slot could not be read'));
+    }
+  }
   const call = async signature => {
     try { return await rpc('eth_call', [{ to: tokenAddress, data: `0x${selector(signature)}` }, 'latest']); }
     catch (e) { if (!e.isRevert) throw e; unavailable.push(signature); return null; }
@@ -57,17 +87,19 @@ export async function scanBaseTokenBasic(tokenAddress, options = {}) {
   if (supply === null || decimals === null) flags.push(flag('INCOMPLETE_METADATA', 30, 'Required ERC20 metadata unavailable'));
   if (supply === '0') flags.push(flag('ZERO_SUPPLY', 40, 'Zero supply'));
   if (!owner) flags.push(flag('OWNER_UNKNOWN', 10, 'owner() unavailable; ownership renunciation cannot be inferred'));
-  return { chain: 'base', address: tokenAddress, supply, owner, symbol: decodeSymbol(symbolHex), decimals, ...risk(flags), bytecode: analysis, unavailable: [...new Set(unavailable)], proPreview: 'Pro inspects earliest observed Transfer concentration and transfer restrictions. Static checks cannot establish sellability.', limitations: ['Selectors and opcodes are heuristic; proxy implementation is not resolved.', 'No detected flag does not imply absence of hidden controls.'] };
+  return { chain: 'base', address: tokenAddress, ...(implementationAddress ? { implementationAddress } : {}), supply, owner, symbol: decodeSymbol(symbolHex), decimals, ...risk(flags), bytecode: analysis, unavailable: [...new Set(unavailable)], proPreview: 'Pro inspects earliest observed Transfer concentration and transfer restrictions. Static checks cannot establish sellability.', limitations: ['Selectors and opcodes are heuristic; known proxy implementations are inspected one level deep when available. Upgrade permissions remain unverified.', 'No detected flag does not imply absence of hidden controls.'] };
 }
 export async function detectBaseEarlyBundlerAndHoneypot(tokenAddress, options = {}) {
   const basic = options.basic ?? await scanBaseTokenBasic(tokenAddress, options), rpc = rpcClient('base', options);
   const latest = raw(await rpc('eth_blockNumber'));
   const from = options.fromBlock !== undefined ? raw(options.fromBlock) : latest > 2000n ? latest - 2000n : 0n;
   if (from > latest || latest - from > 10000n) throw new Error('Transfer history range must be within 10000 blocks');
-  const logs = [];
+  const logs = []; let logQueryRateLimited = false;
   for (let start = from; start <= latest; start += 500n) {
     const end = start + 499n > latest ? latest : start + 499n;
-    const rows = await rpc('eth_getLogs', [{ address: tokenAddress, topics: [TRANSFER_TOPIC], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }]);
+    let rows;
+    try { rows = await rpc('eth_getLogs', [{ address: tokenAddress, topics: [TRANSFER_TOPIC], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }]); }
+    catch (err) { if (!isRateLimit(err)) throw err; logQueryRateLimited = true; break; }
     if (!Array.isArray(rows)) throw new Error('Invalid Transfer logs');
     logs.push(...rows.filter(l => !l.removed && l.address?.toLowerCase() === tokenAddress.toLowerCase() && l.topics?.length === 3 && l.topics.every(t => /^0x[0-9a-fA-F]{64}$/.test(t)) && l.topics[0]?.toLowerCase() === TRANSFER_TOPIC && /^0x[0-9a-fA-F]{64}$/.test(l.data)));
     if (logs.length > 20000) throw new Error('Too many transfers; narrow fromBlock');
@@ -77,9 +109,13 @@ export async function detectBaseEarlyBundlerAndHoneypot(tokenAddress, options = 
   const nonMintTransfers = unique.filter(l => raw(l.data) > 0n && !/^0x0{64}$/i.test(l.topics[1]) && !/^0x0{64}$/i.test(l.topics[2]));
   const firstTransferBlock = nonMintTransfers.length ? raw(nonMintTransfers[0].blockNumber) : null;
   const early = nonMintTransfers.filter(l => raw(l.blockNumber) <= firstTransferBlock + 1n);
-  const recipients = new Map();
-  for (const l of early) { const a = `0x${l.topics[2].slice(-40)}`.toLowerCase(); recipients.set(a, (recipients.get(a) || 0n) + raw(l.data)); }
-  const amounts = [...recipients.values()], total = amounts.reduce((n,a) => n+a, 0n), max = amounts.reduce((n,a) => a > n ? a : n, 0n);
+  const earlySenderTargets = new Map();
+  for (const l of early) {
+    const s = `0x${l.topics[1].slice(-40)}`.toLowerCase(), t = `0x${l.topics[2].slice(-40)}`.toLowerCase();
+    if (!earlySenderTargets.has(s)) earlySenderTargets.set(s, new Set());
+    earlySenderTargets.get(s).add(t);
+  }
+  const excludedPools = new Set([...earlySenderTargets].filter(([, targets]) => targets.size >= 2).map(([s]) => s));
   let transferSimulation = { status: 'NOT_RUN', reason: 'Provide simulationFrom (funded holder), simulationTo and simulationAmount for eth_call.' };
   if (options.simulationFrom || options.simulationTo || options.simulationAmount !== undefined) {
     evmAddress(options.simulationFrom); evmAddress(options.simulationTo); const amount = raw(options.simulationAmount);
@@ -89,8 +125,23 @@ export async function detectBaseEarlyBundlerAndHoneypot(tokenAddress, options = 
       transferSimulation = { status: result === '0x' || result === `0x${word(1)}` ? 'CALL_SUCCEEDED' : result === `0x${word(0)}` ? 'RETURNED_FALSE' : 'NONSTANDARD_RETURN', result };
     } catch (e) { if (!e.isRevert) throw e; transferSimulation = { status: 'REVERTED', reason: 'May be insufficient balance, limits, pause or restriction; not proof of honeypot.' }; }
   }
-  const controls = basic.flags.filter(f => ['BLACKLIST','MUTABLE_TAX','PAUSABLE','DELEGATECALL'].includes(f.code));
-  return { basic, chain: 'base', address: tokenAddress, firstObservedBlock: first?.toString() ?? null, earlyWalletCount: recipients.size, coordinatedWallets: [...recipients.keys()], largestEarlyRecipientPct: pct(max, total), bundlerVerdict: recipients.size >= 3 ? 'EARLY_CONCENTRATION_OBSERVED' : 'INSUFFICIENT_EVIDENCE', honeypotVerdict: controls.length || ['REVERTED', 'RETURNED_FALSE', 'NONSTANDARD_RETURN'].includes(transferSimulation.status) ? 'REVIEW_REQUIRED' : 'UNKNOWN', transferTax: { buyPct: null, sellPct: null, status: 'UNKNOWN', reason: 'Generic eth_call returns no balance deltas. A funded route-specific buy/sell fork simulation is required to measure tax.' }, transferSimulation, lockIndicators: controls, approvalInspection: { approveSelectorPresent: basic.bytecode.approvalPresent, permitSelectorPresent: basic.bytecode.permitPresent, unlimitedApprovalRisk: basic.bytecode.approvalPresent || basic.bytecode.permitPresent ? 'Approval/permit capability found; do not sign unlimited allowances for untrusted spenders.' : 'UNKNOWN', note: 'Standard approve/permit selectors alone are not malicious. No signatures or approvals are requested.' }, coverage: { firstObservedBlock: first?.toString() ?? null, firstTransferBlock: firstTransferBlock?.toString() ?? null, fromBlock: from.toString(), toBlock: latest.toString(), transferCount: unique.length, launchVerified: false }, limitations: ['Earliest observed transfer is not necessarily token launch or a DEX buy.', 'Recipient percentages measure gross observed transfer volume, not supply or beneficial ownership.', 'A successful transfer call does not prove a DEX sell will succeed.'] };
+  const controls = basic.flags.filter(f => ['BLACKLIST','MUTABLE_TAX','PAUSABLE','DELEGATECALL','PROXY_UNRESOLVED','TX_LIMITS','TRADING_TOGGLE','EIP7702_DELEGATED_ACCOUNT'].includes(f.code));
+  let honeypotVerdict = controls.length || ['REVERTED', 'RETURNED_FALSE', 'NONSTANDARD_RETURN'].includes(transferSimulation.status) ? 'REVIEW_REQUIRED' : 'UNKNOWN';
+  let transferTax = { buyPct: null, sellPct: null, status: 'UNKNOWN', reason: 'Generic eth_call returns no balance deltas. A funded route-specific buy/sell fork simulation is required to measure tax.' };
+  if ((!options.rpc || options.enrichmentFetch) && transferTax.status === 'UNKNOWN') {
+    const result = await enrichmentJson(`https://api.honeypot.is/v2/IsHoneypot?address=${tokenAddress}&chainID=8453`, options).catch(() => null);
+    for (const p of [result?.pair?.pair?.address, result?.pairAddress]) if (typeof p === 'string' && /^0x[0-9a-fA-F]{40}$/.test(p)) excludedPools.add(p.toLowerCase());
+    const buy = result?.simulationResult?.buyTax, sell = result?.simulationResult?.sellTax;
+    if (buy != null && sell != null && Number.isFinite(Number(buy)) && Number.isFinite(Number(sell)) && Number(buy) >= 0 && Number(sell) >= 0 && typeof result?.honeypotResult?.isHoneypot === 'boolean') {
+      transferTax = { buyPct: Number(buy), sellPct: Number(sell), status: 'SIMULATED_VIA_API', reason: 'Simulated via honeypot.is on Base mainnet.' };
+      if (result.honeypotResult.isHoneypot) honeypotVerdict = 'HIGH_RISK_HONEYPOT';
+      else if (Math.max(Number(buy), Number(sell)) >= 10) honeypotVerdict = 'REVIEW_REQUIRED';
+    }
+  }
+  const recipients = new Map();
+  for (const l of early) { const a = `0x${l.topics[2].slice(-40)}`.toLowerCase(); if (a === tokenAddress.toLowerCase() || KNOWN_BASE_ROUTERS_AND_POOLS.includes(a) || excludedPools.has(a)) continue; recipients.set(a, (recipients.get(a) || 0n) + raw(l.data)); }
+  const amounts = [...recipients.values()], total = amounts.reduce((n,a) => n+a, 0n), max = amounts.reduce((n,a) => a > n ? a : n, 0n);
+  return { basic, chain: 'base', address: tokenAddress, firstObservedBlock: first?.toString() ?? null, earlyWalletCount: recipients.size, coordinatedWallets: [...recipients.keys()], largestEarlyRecipientPct: pct(max, total), bundlerVerdict: recipients.size >= 3 ? 'EARLY_CONCENTRATION_OBSERVED' : 'INSUFFICIENT_EVIDENCE', honeypotVerdict, transferTax, transferSimulation, lockIndicators: controls, approvalInspection: { approveSelectorPresent: basic.bytecode.approvalPresent, permitSelectorPresent: basic.bytecode.permitPresent, unlimitedApprovalRisk: basic.bytecode.approvalPresent || basic.bytecode.permitPresent ? 'Approval/permit capability found; do not sign unlimited allowances for untrusted spenders.' : 'UNKNOWN', note: 'Standard approve/permit selectors alone are not malicious. No signatures or approvals are requested.' }, coverage: { logQueryRateLimited, firstObservedBlock: first?.toString() ?? null, firstTransferBlock: firstTransferBlock?.toString() ?? null, fromBlock: from.toString(), toBlock: latest.toString(), transferCount: unique.length, launchVerified: false }, limitations: ['Earliest observed transfer is not necessarily token launch or a DEX buy.', 'Recipient percentages measure gross observed transfer volume, not supply or beneficial ownership.', 'A successful transfer call does not prove a DEX sell will succeed.'] };
 }
 export async function traceBaseFundingClusters(holderAddresses, options = {}) {
   if (!Array.isArray(holderAddresses) || !holderAddresses.length || holderAddresses.length > 20) throw new Error('Provide 1–20 wallet addresses');

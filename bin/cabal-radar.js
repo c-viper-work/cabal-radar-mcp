@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { startMcpServer } from '../src/mcp-server.js';
 import { callTool, getUpgradeInfo, environmentOptions } from '../src/service.js';
 import { checkProStatus } from '../src/license.js';
-import { chainName } from '../src/rpc.js';
+import { inferChain, chainName } from '../src/rpc.js';
 const help = `cabal-radar 1.0.0 — Solana & Base risk intelligence
 Usage:
   cabal-radar mcp (or --mcp)
@@ -24,7 +24,7 @@ try {
     const allowed = { mcp: ['mcp'], scan: ['chain','pro','json'], upgrade: ['json'], activate: ['tx','chain','json'], status: ['json'] };
     if (!allowed[command]) throw new Error('Unknown command; use --help');
     for (const key of Object.keys(values)) if (!allowed[command].includes(key)) throw new Error(`--${key} is not valid for ${command}`);
-    const chain = chainName(values.chain), options = environmentOptions(chain);
+    const chain = (command === 'scan' ? inferChain(address, values.chain) : chainName(values.chain)), options = environmentOptions(chain);
     let result;
     if (command === 'mcp') await startMcpServer();
     else if (command === 'upgrade') result = getUpgradeInfo(options);

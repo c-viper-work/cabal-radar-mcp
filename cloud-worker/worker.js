@@ -3,9 +3,12 @@ import { verifyBasePaymentTx, verifySolanaPaymentTx } from '../src/payments.js';
 import { scanSolanaTokenBasic, detectSolanaBlock0Bundler } from '../src/solana-scanner.js';
 import { scanBaseTokenBasic, detectBaseEarlyBundlerAndHoneypot } from '../src/base-scanner.js';
 import { chainName, solanaAddress, evmAddress } from '../src/rpc.js';
-const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers } });
+const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-payment-tx, x-payment-chain' };
+const verifiedReceipts = new Map();
+const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers } });
 export async function handleRequest(request, env = {}, injected = {}) {
   const url = new URL(request.url);
+  if (request.method === 'OPTIONS' && ['/health', '/scan'].includes(url.pathname)) return new Response(null, { status: 204, headers: cors });
   if (url.pathname === '/health' && request.method === 'GET') return json({ name: 'cabal-radar-mcp', version: '1.0.0' });
   if (url.pathname !== '/scan') return json({ error: 'NOT_FOUND' }, 404);
   if (request.method !== 'POST') return json({ error: 'METHOD_NOT_ALLOWED' }, 405, { allow: 'POST' });
@@ -15,7 +18,16 @@ export async function handleRequest(request, env = {}, injected = {}) {
   try {
     chainName(paymentChain);
     const paymentOptions = { rpcUrl: paymentChain === 'base' ? env.BASE_RPC_URL : env.SOLANA_RPC_URL, ...injected.paymentOptions };
-    await (paymentChain === 'base' ? verifyBasePaymentTx : verifySolanaPaymentTx)(txHash, paymentOptions);
+    // Solana signatures are case-sensitive: retain the exact receipt in each cache entry.
+    const key = `${paymentChain}:${txHash.toLowerCase()}`;
+    const cached = verifiedReceipts.get(key);
+    if (injected.paymentOptions || !cached || (paymentChain === 'solana' && cached !== txHash)) {
+      await (paymentChain === 'base' ? verifyBasePaymentTx : verifySolanaPaymentTx)(txHash, paymentOptions);
+      if (!injected.paymentOptions) {
+        if (verifiedReceipts.size >= 256) verifiedReceipts.delete(verifiedReceipts.keys().next().value);
+        verifiedReceipts.set(key, txHash);
+      }
+    }
   } catch { return json({ error: 'PAYMENT_NOT_VERIFIED' }, 402); }
   try {
     if (!request.headers.get('content-type')?.includes('application/json')) return json({ error: 'JSON_REQUIRED' }, 415);

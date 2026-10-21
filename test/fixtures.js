@@ -13,7 +13,8 @@ export function basePayment(overrides = {}) {
 }
 export function usdcLog(amount = C.MIN_USDC) { return { address: C.BASE_USDC, topics: [C.TRANSFER_TOPIC, topic(ADDRESS), topic(C.EVM_RECIPIENT)], data: `0x${word(amount)}` }; }
 export function solTx(overrides = {}) {
-  return { slot: 10, blockTime: 100, transaction: { signatures: [SIG], message: { accountKeys: [{ pubkey: WALLET }], instructions: [] } }, meta: { err: null, preBalances: [0], postBalances: [Number(C.MIN_SOL)], preTokenBalances: [], postTokenBalances: [], ...overrides.meta }, ...Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== 'meta')) };
+  const { meta, transaction, ...rest } = overrides;
+  return { slot: 10, blockTime: 100, transaction: { signatures: [SIG], ...transaction, message: { accountKeys: [{ pubkey: WALLET }], instructions: [], ...transaction?.message } }, meta: { err: null, preBalances: [0], postBalances: [Number(C.MIN_SOL)], preTokenBalances: [], postTokenBalances: [], ...meta }, ...rest };
 }
 export const solPayment = tx => async method => method === 'getGenesisHash' ? C.SOLANA_GENESIS : tx;
 export const tokenBalance = (owner, amount, index = 0) => ({ mint: MINT, owner, accountIndex: index, uiTokenAmount: { amount: String(amount), decimals: 6 } });

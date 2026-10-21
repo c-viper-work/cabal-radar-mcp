@@ -8,6 +8,14 @@ Inspect Solana mint/freeze authorities, Token-2022 controls, holder-account conc
 
 > This is heuristic investigation software, not a completed security audit. A high safety score does not establish safety. Tax and honeypot results remain **UNKNOWN** when the available evidence cannot establish them. Launch coverage is never implied by a bounded historical sample.
 
+## Zero-clone MCP setup
+
+```sh
+npx -y github:c-viper-work/cabal-radar-mcp mcp
+```
+
+For MCP clients, use `command: "npx"` with `args: ["-y", "github:c-viper-work/cabal-radar-mcp", "mcp"]`. The globally installed configuration below remains supported.
+
 ## Installation
 
 Requires **Node.js 22+**. No dependency install is needed to run a source checkout:
@@ -33,8 +41,8 @@ Both `cabal-radar` and `cabal-radar-mcp` are executable aliases. No arguments st
 ## CLI
 
 ```sh
-cabal-radar scan EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v --chain solana --json
-cabal-radar scan 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --chain base --json
+cabal-radar scan DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 --chain solana --json
+cabal-radar scan 0x532f27101965dd16442E59d40670FaF5eBB142E4 --chain base --json
 cabal-radar upgrade
 cabal-radar activate --tx <transaction_hash_or_signature> --chain <base|solana>
 cabal-radar status
@@ -42,7 +50,7 @@ cabal-radar scan <token_address> --chain solana --pro --json
 cabal-radar mcp
 ```
 
-Replace angle-bracket placeholders before running. Solana is the default chain. `--pro` returns both basic and deep results after activation; without a valid license it prints upgrade information and exits with status 1. Input/RPC failures also exit 1; successful commands exit 0. CLI activation only reads chain state and writes a local license. No command submits transactions or approves tokens.
+Replace angle-bracket placeholders before running. Single-token scans infer Base for a valid `0x` address, otherwise Solana. Explicit `--chain` values take precedence. `--pro` returns both basic and deep results after activation; without a valid license it prints upgrade information and exits with status 1. Input/RPC failures also exit 1; successful commands exit 0. CLI activation only reads chain state and writes a local license. No command submits transactions or approves tokens.
 
 ## MCP setup: Claude Desktop, Cursor and Windsurf
 
@@ -124,7 +132,7 @@ cabal-radar activate --tx <solana_signature> --chain solana
 cabal-radar status
 ```
 
-Base verification checks `eth_chainId`, transaction/receipt consistency, successful mined status, and either a direct native payment or a matching official USDC Transfer event. Native internal transfers are not accepted. The USDC threshold applies to a single Transfer event. Solana verification checks the mainnet genesis hash, successful confirmed parsed transaction, signature and slot, then the recipient's net SOL increase or net USDC increase across its token accounts. Transfers between the recipient's own accounts do not create a qualifying USDC net increase. Precision-unsafe numeric balances fail closed.
+Base verification checks `eth_chainId`, transaction/receipt consistency, successful mined status, and either a direct native payment or a matching official USDC Transfer event. Native internal transfers are not accepted. The USDC threshold applies to the sum of valid official USDC Transfer events to the recipient in one successful receipt; malformed matching logs fail verification. Solana verification checks the mainnet genesis hash, successful confirmed parsed transaction, signature and slot, then the recipient's net SOL increase or net USDC increase across its token accounts. Transfers between the recipient's own accounts do not create a qualifying USDC net increase. Precision-unsafe numeric balances fail closed.
 
 Default storage is `~/.cabal-radar/license.json`, privately created and atomically replaced. The saved record contains only version, hashed machine ID, transaction identifier, chain and HMAC. Machine input strings are not saved or sent to a server. Activation does not require putting the challenge in a memo. Reinstalling or moving machines can change the local ID; reactivate on the destination machine.
 
@@ -160,17 +168,17 @@ Low-level scanner exports are intentionally callable directly in an open-source 
 
 ## Detection methodology
 
-- **Solana basic:** validates decoded 32-byte base58 keys and parsed mint ownership; checks mint/freeze control, permanent delegates, transfer hooks, ≥10% transfer-fee configuration, default frozen accounts and top-ten token-account share. Pools, burn addresses and vaults are not labeled or removed.
-- **Solana coordination:** paginates up to three pages of 100 signatures, then loads up to 40 of the oldest successful transactions in that sample. Positive owner token deltas are acquisition candidates. Disjoint windows of at most two slots flag multiple wallets; actual parsed system transfers to the documented Jito tip accounts are noted. These are not proven DEX buys or atomic bundles. `bundledSupplyPct` is current top-account exposure to flagged owners, not original bought supply.
+- **Solana basic:** validates decoded 32-byte base58 keys and parsed mint ownership; checks mint/freeze control, permanent delegates, transfer hooks, ≥10% transfer-fee (`HIGH_TRANSFER_FEE`) and non-zero <10% transfer-fee (`NONZERO_TRANSFER_FEE`) configuration, `scaledUiAmountConfig`, `interestBearingConfig`, `mintCloseAuthority`, `confidentialTransferMint`, default frozen accounts and top-ten non-pool token-account share. RPC token-account concentration falls back to RugCheck when `getTokenLargestAccounts` is restricted or rate-limited and labels known pool owners.
+- **Solana coordination:** paginates up to three pages of 100 signatures, then loads up to 40 of the oldest successful transactions in that sample. Positive owner token deltas are acquisition candidates, excluding known DEX/AMM/launchpad programs and non-signer pool PDAs. Windows of at most two slots flag coordinated buys (at least three distinct wallets, or two wallets sharing a fee payer, same transaction or Jito tip); actual parsed system transfers to the documented Jito tip accounts are noted. These are not proven DEX buys or atomic bundles. `bundledSupplyPct` is current top-account exposure to flagged owners, not original bought supply.
 - **Solana funding:** up to 20 provided wallet owners; default one page and ten oldest sampled transactions per owner. Orders same-slot signatures by reverse RPC response index and interleaves each top-level instruction with its CPI instructions in execution order. Groups the first observed inbound SOL transfer of at least 1,000,000 lamports (0.001 SOL) by source; library callers can set `options.minFundingLamports`. `coverage.ignoredDustTransfers` counts ignored smaller transfers, and per-wallet coverage is in `coverage.holders`. Different-source events form connected timing groups when consecutive times differ by at most 60 seconds; a connected group may span longer than 60 seconds. `sybilClusterPct` is the fraction of provided unique wallets sharing a source, not supply percentage; timing-only groups are excluded.
-- **Base basic:** reads code and ERC20 metadata, disassembles PUSH instructions to avoid interpreting PUSH data as opcodes, and identifies selected control selectors. All bytecode is scanned, including metadata, to prevent forged metadata from hiding executable jump targets. This conservative choice can flag bytes in genuine metadata. Dynamic code paths, computed selectors, proxy implementation logic and role access are not fully analyzed.
-- **Base deep:** defaults to the last 2,000 blocks, queried in 500-block chunks. Anchors on the earliest positive-amount non-mint/non-burn Transfer block and its successor (`coverage.firstTransferBlock`), reports the earliest observed block including mints as `coverage.firstObservedBlock`, excludes zero amounts, and aggregates gross recipient transfer volume. Gross volume is not token supply and can include repeated transfers. Optional `eth_call` checks an explicitly provided transfer scenario; reverts, false returns and nonstandard returns are review signals, not proof of honeypot. Generic RPC/node failures propagate instead of being treated as reverts. Exact buy/sell tax needs funded, route-specific fork simulation and remains unknown here. Standard approve/permit capability is informational, not evidence of malicious approval behavior.
+- **Base basic:** reads code and ERC20 metadata, disassembles PUSH instructions to avoid interpreting PUSH data as opcodes, detects EIP-7702 delegation designators, inspects EIP-1167 / EIP-1967 / ZeppelinOS proxy implementations one level deep, and identifies selected control selectors. All bytecode is scanned, including metadata, to prevent forged metadata from hiding executable jump targets. This conservative choice can flag bytes in genuine metadata. Dynamic code paths, computed selectors, deeper proxy chains and role access are not fully analyzed.
+- **Base deep:** defaults to the last 2,000 blocks, queried in 500-block chunks. Anchors on the earliest positive-amount non-mint/non-burn Transfer block and its successor (`coverage.firstTransferBlock`), reports the earliest observed block including mints as `coverage.firstObservedBlock`, excludes zero amounts, known routers/bridges, self-transfers and transfer-source pair addresses, and aggregates gross recipient transfer volume. Gross volume is not token supply and can include repeated transfers. Optional `eth_call` checks an explicitly provided transfer scenario; reverts, false returns and nonstandard returns are review signals, not proof of honeypot. Generic RPC/node failures propagate instead of being treated as reverts. Live scans can supplement unknown tax with honeypot.is simulation; unavailable simulation remains unknown. Standard approve/permit capability is informational, not evidence of malicious approval behavior.
 
 Scores start at 100 and subtract explicit per-flag penalties, clamped at zero. Risk bands: LOW 81–100, MEDIUM 51–80, HIGH 26–50, CRITICAL 0–25. A zero-flag report still carries evidence limitations. Unknown data is not a safety guarantee.
 
 ## Limitations and trust model
 
-**Zero central server does not mean zero network access.** Token addresses and transaction identifiers are sent to configured RPC providers, which see request metadata. There is no telemetry, hosted activation database, private-key input, wallet connection, trading or automatic signing.
+**Zero central server does not mean zero network access.** Token addresses and transaction identifiers are sent to configured RPC providers (with automatic public failover to `*.publicnode.com` when the default public RPC is rate-limited or forbidden) and read-only enrichment endpoints (`api.rugcheck.xyz` when Solana `getTokenLargestAccounts` is restricted, and `api.honeypot.is` for Base tax simulation; the browser web scanner also queries `api.dexscreener.com` and `api.gopluslabs.io`). Set `CABAL_RADAR_NO_FAILOVER=1` to disable automatic RPC failover and `CABAL_RADAR_NO_ENRICHMENT=1` to disable third-party enrichment in the CLI/MCP server. There is no first-party telemetry, hosted activation database or private-key input; the CLI and MCP server never request wallet connections or sign transactions.
 
 **Public receipts are replayable.** A transaction hash alone cannot prove that the caller paid, bind a payment to a machine challenge, or enforce globally unique use. The deterministic HMAC provides machine-bound local consistency, not a secret that a local attacker cannot reproduce. This release does not claim payer authentication, tamper-proof licensing or one-payment-per-machine enforcement. Solving those requires a different authorization scheme, such as a signed payer challenge plus an on-chain entitlement or shared redemption state.
 
@@ -207,7 +215,7 @@ For MCP directories such as mcp.so, Smithery, Glama and Awesome-MCP, use:
 
 Category: blockchain / security / developer tools. License: MIT. Transport: stdio. Repository owner: `c-viper-work`.
 
-The static, self-contained `docs/index.html` is ready for a GitHub Pages source of **branch /docs** after the repository is published. It has accessible setup tabs, clipboard buttons, mobile layout, exact payment routes and no third-party scripts or external fonts. Clipboard access requires HTTPS or a secure local origin; otherwise the text is selected for manual copy. It never requests wallet access or initiates payment.
+The static, self-contained `docs/index.html` is ready for a GitHub Pages source of **branch /docs** after the repository is published. It has a live browser token scanner, accessible setup tabs, clipboard buttons, mobile layout, exact payment routes and no third-party script tags or external fonts. Clipboard access requires HTTPS or a secure local origin; otherwise the text is selected for manual copy. Scanning requires no wallet connection; optional in-browser Base wallet checkout (`window.ethereum`) is only invoked when the user explicitly clicks a Base payment button.
 
 ## Development and verification
 
@@ -235,3 +243,19 @@ Architecture: `constants` → `rpc` / `payments` → scanners → `service` → 
 ## License
 
 MIT © 2026 c-viper-work. See [LICENSE](LICENSE).
+
+## Live browser scanner and audit coverage
+
+The landing page scans without installation: DexScreener market telemetry, RugCheck/GoPlus Solana authorities and holders, Base bytecode/metadata, and GoPlus/honeypot.is controls and simulated taxes. Public APIs may block CORS or rate-limit; partial evidence is labeled and an unavailable security score remains unknown. Known pools are excluded from the browser concentration estimate, but the lists are incomplete and account owners are not verified beneficial owners.
+
+Browser Pro verifies the same mainnet receipt rules as the CLI, stores only the receipt reference in localStorage and re-verifies on reload. Optional Base wallet buttons send exactly 0.006 ETH or 15 official USDC (plus network gas) only after wallet confirmation. Existing Solana receipts can also activate Pro. Browser storage is separate from machine-bound CLI activation; the UI provides the exact CLI command. Pro reveals provider holder/insider evidence, supports JSON/Markdown export, and runs bounded launch/funding analysis on demand. It cannot infer unavailable launch history or prove shared control.
+
+CLI/MCP single-token scans infer Base for a valid `0x` address when chain is omitted; explicit chain values retain validation. Live RPC calls retry transient limits twice; injected `rpc`/`fetch` transports remain single-attempt unless `maxRetries` is positive. Backoff respects cancellation. Solana transaction version errors retry with version 1; unavailable individual historical transactions count as missing. RugCheck holder fallback and honeypot.is simulation use four-second timeouts and can be exercised with `enrichmentFetch` in tests.
+
+Solana clustering excludes curated pool/program addresses and signer sells into non-signer pools. Known exchange funding is reported separately in `exchangeFundedGroups`. Empty/unresolved holders yield null bundled exposure. `launchWindowReached` indicates exhaustion of the RPC sample, not proof of creation. Base scans inspect known minimal/EIP-1967/ZeppelinOS implementations one level deep, recognize EIP-7702 delegation and exclude known routers from recipient counts. Rate-limited log history is marked incomplete.
+
+New machine labels omit hostname and use `CABAL_RADAR_MACHINE_ID` (if set), otherwise the home directory, plus platform and architecture. Use a stable home path or explicit machine ID for container persistence; persist the license file too. Legacy hostname-based licenses remain readable on their original machine; after a hostname change, an old license can be reactivated with its receipt.
+
+Worker JSON responses support CORS; `/health` and `/scan` accept OPTIONS preflights. Successful receipts are cached in memory (at most 256 entries; injected payment options bypass it). This is an optimization, not payer authentication or replay protection.
+
+The static site deploys from `docs/`. After changing portable modules run `node scripts/build-browser.mjs`; tests verify the generated `docs/scanner-core.js` matches source. No bundler or runtime dependencies are required. Social assets are `docs/og-card.svg` and `docs/og-card.png`.

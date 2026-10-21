@@ -1,25 +1,26 @@
 import { paymentInfo } from './constants.js';
 import { getMachineChallenge, checkProStatus, saveLicense } from './license.js';
-import { chainName, mapLimit } from './rpc.js';
+import { inferChain, chainName, mapLimit } from './rpc.js';
 import { scanSolanaTokenBasic, detectSolanaBlock0Bundler, traceSolanaFundingClusters } from './solana-scanner.js';
 import { scanBaseTokenBasic, detectBaseEarlyBundlerAndHoneypot, traceBaseFundingClusters } from './base-scanner.js';
 const chain = {
   type: 'string', enum: ['solana', 'base'], default: 'solana',
   description: 'Mainnet to query: solana or base; optional, defaults to solana. Addresses in the corresponding token entry or request must match this chain.'
 };
+const inferredChain = { type: 'string', enum: ['solana', 'base'], description: 'Optional mainnet; inferred as base for a 0x-prefixed 40-hex token address, otherwise solana. Explicit values must match the address.' };
 const token = {
   type: 'object',
-  description: 'One token to audit: required address and optional chain (defaults to solana); no other fields are accepted.',
+  description: 'One token to audit: required address and optional chain (auto-detected from address); no other fields are accepted.',
   properties: {
     address: { type: 'string', description: 'Required token address, with no default: a Solana Base58 SPL mint decoding to 32 bytes, or a Base ERC-20 contract address with 0x followed by 40 hex digits, according to chain; at most 512 characters.' },
-    chain
+    chain: inferredChain
   },
   required: ['address'], additionalProperties: false
 };
 export const TOOLS = [
   {
     name: 'scan_token_safety',
-    description: 'Scan one mainnet token through read-only RPC calls and return JSON with chain, address, safetyScore, riskLevel, flags, chain-specific metadata and limitations. Supply a Solana Base58 mint or Base 0x-prefixed 40-hex contract address; chain defaults to solana. Use this free initial screen before detect_block0_bundler for early-acquisition evidence, trace_funding_clusters for wallet relationships, or batch_audit_watchlist for multiple tokens; scores are heuristics, not proof of safety.',
+    description: 'Scan one mainnet token through read-only RPC calls and return JSON with chain, address, safetyScore, riskLevel, flags, chain-specific metadata and limitations. Supply a Solana Base58 mint or Base 0x-prefixed 40-hex contract address; chain is inferred from address when omitted. Use this free initial screen before detect_block0_bundler for early-acquisition evidence, trace_funding_clusters for wallet relationships, or batch_audit_watchlist for multiple tokens; scores are heuristics, not proof of safety.',
     annotations: { title: 'Scan Token Safety', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     inputSchema: token
   },
@@ -44,11 +45,11 @@ export const TOOLS = [
   },
   {
     name: 'detect_block0_bundler',
-    description: 'Analyze one mainnet token via read-only RPC and return JSON with basic scan, bundlerVerdict, coordinatedWallets, coverage and limitations, plus Solana clusters or Base transferSimulation and honeypotVerdict; bounded history does not prove launch coverage or sellability. Requires a Solana Base58 mint or Base 0x-prefixed 40-hex contract address; chain defaults to solana, Base fromBlock defaults to max(0, latest minus 2000) and must be within 10000 blocks of latest, and optional Base transfer simulation requires non-empty simulationFrom, simulationTo and simulationAmount together. On Base, transferSimulation.status is NOT_RUN when all three are omitted, or when simulationFrom and simulationTo are omitted or empty strings and simulationAmount is omitted; partial non-empty combinations fail validation. Base-only parameters still undergo inputSchema type/pattern validation before chain dispatch and are unused on Solana after passing schema validation. Use after scan_token_safety for deeper acquisition evidence, trace_funding_clusters for wallet funding links, or batch_audit_watchlist for multiple tokens with default analysis settings. Requires local Pro; otherwise returns PRO_REQUIRED with upgrade information from get_pro_upgrade_info for use before activate_pro_license.',
+    description: 'Analyze one mainnet token via read-only RPC and return JSON with basic scan, bundlerVerdict, coordinatedWallets, coverage and limitations, plus Solana clusters or Base transferSimulation and honeypotVerdict; bounded history does not prove launch coverage or sellability. Requires a Solana Base58 mint or Base 0x-prefixed 40-hex contract address; chain is inferred from address when omitted, Base fromBlock defaults to max(0, latest minus 2000) and must be within 10000 blocks of latest, and optional Base transfer simulation requires non-empty simulationFrom, simulationTo and simulationAmount together. On Base, transferSimulation.status is NOT_RUN when all three are omitted, or when simulationFrom and simulationTo are omitted or empty strings and simulationAmount is omitted; partial non-empty combinations fail validation. Base-only parameters still undergo inputSchema type/pattern validation before chain dispatch and are unused on Solana after passing schema validation. Use after scan_token_safety for deeper acquisition evidence, trace_funding_clusters for wallet funding links, or batch_audit_watchlist for multiple tokens with default analysis settings. Requires local Pro; otherwise returns PRO_REQUIRED with upgrade information from get_pro_upgrade_info for use before activate_pro_license.',
     annotations: { title: 'Detect Block-0 Bundler', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     inputSchema: {
       ...token,
-      description: 'One token to analyze: required address, optional chain (defaults to solana), optional Base fromBlock, and optional Base transfer-simulation parameters simulationFrom, simulationTo and simulationAmount. On Base, supply all three non-empty together to run simulation; partial non-empty combinations fail validation. If all three are omitted, or simulationFrom and simulationTo are omitted or empty strings without simulationAmount, transferSimulation.status is NOT_RUN. Base-only parameters still undergo inputSchema type/pattern validation before chain dispatch and are unused on Solana after passing schema validation; no other fields are accepted.',
+      description: 'One token to analyze: required address, optional chain (auto-detected from address), optional Base fromBlock, and optional Base transfer-simulation parameters simulationFrom, simulationTo and simulationAmount. On Base, supply all three non-empty together to run simulation; partial non-empty combinations fail validation. If all three are omitted, or simulationFrom and simulationTo are omitted or empty strings without simulationAmount, transferSimulation.status is NOT_RUN. Base-only parameters still undergo inputSchema type/pattern validation before chain dispatch and are unused on Solana after passing schema validation; no other fields are accepted.',
       properties: {
         ...token.properties,
         fromBlock: { type: 'integer', minimum: 0, description: 'Optional Base-only inclusive start block: nonnegative safe integer, no later than latest and at most 10000 blocks behind it. Defaults to max(0, latest minus 2000). Still undergoes inputSchema integer/minimum validation before chain dispatch; unused on Solana after passing schema validation. Narrow the range if the query exceeds 20000 transfers.' },
@@ -77,12 +78,12 @@ export const TOOLS = [
   },
   {
     name: 'batch_audit_watchlist',
-    description: 'Audit 1–20 mainnet tokens through read-only RPC with concurrency 3 and return JSON containing results (each with address, chain, basic and deep, or error) and generatedAt; format markdown adds a markdown field while retaining JSON. Each entry requires a Solana Base58 mint or Base 0x-prefixed 40-hex contract address, with per-entry chain defaulting to solana; format defaults to json and deep scans use default settings without transfer simulation. Use for multiple tokens, scan_token_safety for one free screen, detect_block0_bundler for one configurable deep scan, or trace_funding_clusters for wallet relationships. Requires local Pro; otherwise returns PRO_REQUIRED with get_pro_upgrade_info details for subsequent activate_pro_license use.',
+    description: 'Audit 1–20 mainnet tokens through read-only RPC with concurrency 3 and return JSON containing results (each with address, chain, basic and deep, or error) and generatedAt; format markdown adds a markdown field while retaining JSON. Each entry requires a Solana Base58 mint or Base 0x-prefixed 40-hex contract address, with per-entry chain inferred from address when omitted; format defaults to json and deep scans use default settings without transfer simulation. Use for multiple tokens, scan_token_safety for one free screen, detect_block0_bundler for one configurable deep scan, or trace_funding_clusters for wallet relationships. Requires local Pro; otherwise returns PRO_REQUIRED with get_pro_upgrade_info details for subsequent activate_pro_license use.',
     annotations: { title: 'Batch Audit Watchlist', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     inputSchema: {
       type: 'object',
       properties: {
-        tokens: { type: 'array', items: token, minItems: 1, maxItems: 20, description: 'Required list of 1–20 token objects, with no default; each supplies address and optional chain (defaults independently to solana). Mixed chains are allowed; audits use default deep-scan settings and individual failures appear in results.' },
+        tokens: { type: 'array', items: token, minItems: 1, maxItems: 20, description: 'Required list of 1–20 token objects, with no default; each supplies address and optional chain (auto-detected from address when omitted). Mixed chains are allowed; audits use default deep-scan settings and individual failures appear in results.' },
         format: { type: 'string', enum: ['json', 'markdown'], default: 'json', description: 'Optional output format: json (default) or markdown. Both return JSON results and generatedAt; markdown additionally includes a Markdown summary table in the markdown field.' }
       },
       required: ['tokens'], additionalProperties: false
@@ -112,7 +113,7 @@ export function environmentOptions(chain) {
 export async function callTool(name, args = {}, options = {}) {
   const tool = TOOLS.find(t => t.name === name);
   if (!tool) throw new Error('Unknown tool'); validate(args, tool.inputSchema);
-  const chain = chainName(args.chain), opts = { ...environmentOptions(chain), ...options };
+  const chain = (['scan_token_safety', 'detect_block0_bundler'].includes(name) ? inferChain(args.address, args.chain) : chainName(args.chain)), opts = { ...environmentOptions(chain), ...options };
   if (name === 'get_pro_upgrade_info') return getUpgradeInfo(opts);
   if (name === 'activate_pro_license') { await saveLicense({ chain, txHash: args.txHash }, opts); return checkProStatus(opts); }
   if (name === 'scan_token_safety') return basicScan(args.address, chain, opts);
@@ -120,7 +121,7 @@ export async function callTool(name, args = {}, options = {}) {
   if (name === 'detect_block0_bundler') return deepScan(args.address, chain, { ...opts, ...args });
   if (name === 'trace_funding_clusters') return chain === 'base' ? traceBaseFundingClusters(args.holderAddresses, opts) : traceSolanaFundingClusters(args.holderAddresses, opts);
   const results = await mapLimit(args.tokens, 3, async t => {
-    const c = chainName(t.chain), o = { ...environmentOptions(c), ...options };
+    const c = inferChain(t.address, t.chain), o = { ...environmentOptions(c), ...options };
     try { const basic = await basicScan(t.address, c, o); return { address: t.address, chain: c, basic, deep: await deepScan(t.address, c, { ...o, basic }) }; }
     catch (error) { return { address: t.address, chain: c, error: error.message }; }
   });

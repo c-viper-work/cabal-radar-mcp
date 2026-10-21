@@ -26,3 +26,22 @@ export const JITO_TIP_ACCOUNTS = Object.freeze([
 export function paymentInfo() {
   return { base: { chainId: 8453, recipient: EVM_RECIPIENT, usdc: { contract: BASE_USDC, decimals: 6, minimum: '15000000', display: '15 USDC' }, eth: { minimum: MIN_ETH.toString(), display: '0.006 ETH' } }, solana: { network: 'mainnet-beta', recipient: SOLANA_RECIPIENT, usdc: { mint: SOLANA_USDC, decimals: 6, minimum: MIN_USDC.toString(), display: '15 USDC' }, sol: { minimum: MIN_SOL.toString(), display: '0.1 SOL' } } };
 }
+
+export const KNOWN_SOLANA_POOLS_AND_PROGRAMS = Object.freeze([
+  '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg',
+  'Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1', 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA',
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
+  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C',
+  'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', 'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5duoVn5Ua',
+  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, '11111111111111111111111111111111'
+]);
+export const KNOWN_SOLANA_EXCHANGE_WALLETS = Object.freeze([
+  '5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9', '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+  'H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS', '2AQdpHJ2JpcEgPiATUXjQxA8QmafFegfQwSLWSprPicm',
+  '5VCwKtCXgCJ6kit5FybXjvriW3xELsFDhYrPSqtJNmcD', 'AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2'
+]);
+export const KNOWN_BASE_ROUTERS_AND_POOLS = Object.freeze([
+  '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24', '0x2626664c2603336e57b271c5c0b26f421741e481',
+  '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', '0x6ff5693b99212da76ad316178a184ab56d299b43',
+  '0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43', '0x4200000000000000000000000000000000000010'
+]);

@@ -1,5 +1,5 @@
 import { EVM_RECIPIENT, SOLANA_RECIPIENT, BASE_USDC, SOLANA_USDC, MIN_USDC, MIN_ETH, MIN_SOL, TRANSFER_TOPIC, BASE_CHAIN_ID, SOLANA_GENESIS } from './constants.js';
-import { rpcClient, raw, base58Bytes } from './rpc.js';
+import { rpcClient, raw, base58Bytes, solanaTransaction } from './rpc.js';
 const eq = (a, b) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 export async function verifyBasePaymentTx(txHash, options = {}) {
   if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new Error('Invalid Base transaction hash');
@@ -11,8 +11,13 @@ export async function verifyBasePaymentTx(txHash, options = {}) {
   let asset, amount;
   if (eq(tx.to, EVM_RECIPIENT) && raw(tx.value) >= MIN_ETH) { asset = 'ETH'; amount = raw(tx.value); }
   else {
-    const log = (receipt.logs || []).find(l => !l.removed && eq(l.address, BASE_USDC) && l.topics?.length === 3 && eq(l.topics[0], TRANSFER_TOPIC) && eq(l.topics[2], `0x${'0'.repeat(24)}${EVM_RECIPIENT.slice(2)}`) && /^0x[0-9a-fA-F]{64}$/.test(l.data) && raw(l.data) >= MIN_USDC);
-    if (log) { asset = 'USDC'; amount = raw(log.data); }
+    let usdcSum = 0n;
+    for (const l of receipt.logs || []) {
+      if (l.removed || !eq(l.address, BASE_USDC) || l.topics?.length !== 3 || !eq(l.topics[0], TRANSFER_TOPIC) || !eq(l.topics[2], `0x${'0'.repeat(24)}${EVM_RECIPIENT.slice(2)}`)) continue;
+      if (!/^0x[0-9a-fA-F]{64}$/.test(l.data)) throw new Error('No qualifying Base payment: malformed USDC Transfer');
+      usdcSum += raw(l.data);
+    }
+    if (usdcSum >= MIN_USDC) { asset = 'USDC'; amount = usdcSum; }
   }
   if (!asset) throw new Error('No qualifying Base payment to the official recipient');
   return { verified: true, chain: 'base', txHash: txHash.toLowerCase(), asset, amount: amount.toString(), recipient: EVM_RECIPIENT, blockNumber: receipt.blockNumber };
@@ -21,7 +26,7 @@ export async function verifySolanaPaymentTx(signature, options = {}) {
   if (base58Bytes(signature) !== 64) throw new Error('Invalid Solana signature');
   const rpc = rpcClient('solana', options);
   if (await rpc('getGenesisHash') !== SOLANA_GENESIS) throw new Error('RPC is not Solana mainnet');
-  const tx = await rpc('getTransaction', [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]);
+  const tx = await solanaTransaction(rpc, signature);
   if (!tx?.meta || tx.meta.err !== null || !Number.isSafeInteger(tx.slot)) throw new Error('Payment is missing, pending or failed');
   if (!tx.transaction?.signatures?.includes(signature)) throw new Error('Payment signature mismatch');
   const keys = tx.transaction.message.accountKeys.map(k => typeof k === 'string' ? k : k.pubkey);
